@@ -1,8 +1,13 @@
 
 (ns clojure.tools.nrepl.ack
-  (:require [clojure.tools.nrepl :as repl]
-            [clojure.tools.nrepl.transport :as t])
-  (:import (java.util.concurrent Future TimeUnit TimeoutException)))
+  (:require ;[clojure.tools.nrepl :as repl]
+            ;[clojure.tools.nrepl.transport :as t]
+   )
+  (:import
+   ;;(java.util.concurrent Future TimeUnit TimeoutException)
+   (clojure.lang Future)
+   ()
+   ))
 
 ; could be a lot fancier, but it'll do for now
 (def ^{:private true} ack-port-promise (atom nil))
@@ -26,11 +31,7 @@
    => (wait-for-ack)
    59872 ; the port of the server started via start-server"
   [timeout]
-  (let [^Future f (future @@ack-port-promise)]
-    (try
-      ; no deref with timeout in 1.2
-      (.get f timeout TimeUnit/MILLISECONDS)
-      (catch TimeoutException e))))
+  (deref (future @@ack-port-promise) timeout nil))
 
 (defn handle-ack
   [h]
@@ -42,8 +43,8 @@
         (t/send transport {:status :done})))))
 
 ; TODO could stand to have some better error handling around all of this
-(defn send-ack
-  [my-port ack-port]
-  (with-open [transport (repl/connect :port ack-port)]
-    (let [client (repl/client transport 1000)]
-      (repl/message client {:op :ack :port my-port}))))
+(comment (defn send-ack
+           [my-port ack-port]
+           (with-open [transport (repl/connect :port ack-port)]
+             (let [client (repl/client transport 1000)]
+               (repl/message client {:op :ack :port my-port})))))

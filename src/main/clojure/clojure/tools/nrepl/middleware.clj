@@ -1,8 +1,8 @@
 (ns clojure.tools.nrepl.middleware
-  (:require clojure.tools.nrepl
-            [clojure.tools.nrepl.transport :as transport]
-            [clojure.tools.nrepl.misc :as misc]
-            [clojure.set :as set])
+  (:require ;; clojure.tools.nrepl
+   ;;[clojure.tools.nrepl.transport :as transport]
+   [clojure.tools.nrepl.misc :as misc]
+   [clojure.set :as set])
   (:refer-clojure :exclude (comparator)))
 
 (defn- var-name

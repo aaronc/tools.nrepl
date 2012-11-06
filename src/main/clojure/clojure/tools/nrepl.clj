@@ -11,10 +11,12 @@
   clojure.tools.nrepl
   (:require [clojure.tools.nrepl.transport :as transport]
             clojure.set
-            [clojure.java.io :as io])
+            [clojure.java.io :as io]
+            [clojure.tools.nrepl.platform :as platform])
   (:use [clojure.tools.nrepl.misc :only (uuid)])
   (:import clojure.lang.LineNumberingPushbackReader
-           (java.io Reader StringReader Writer PrintWriter)))
+           (System.IO )
+           (comment (java.io Reader StringReader Writer PrintWriter))))
 
 (defn response-seq
   "Returns a lazy seq of messages received via the given Transport.
@@ -22,7 +24,7 @@
    The seq will end only when the underlying Transport is closed (i.e.
    returns nil from `recv`) or if a message takes longer than `timeout`
    millis to arrive."
-  ([transport] (response-seq transport Long/MAX_VALUE))
+  ([transport] (response-seq transport platform/long-max-value))
   ([transport timeout]
     (take-while identity (repeatedly #(transport/recv transport timeout)))))
 
@@ -41,7 +43,7 @@
                            [now %]
                            head))
                        ; nanoTime appropriate here; looking to maintain ordering, not actual timestamps
-                       (System/nanoTime))
+                       (platform/ticks))
         tracking-seq (fn tracking-seq [responses]
                        (lazy-seq
                          (if (seq responses)
@@ -95,7 +97,7 @@
   [client & {:keys [clone]}]
   (let [resp (first (message client (merge {:op "clone"} (when clone {:session clone}))))]
     (or (:new-session resp)
-        (throw (IllegalStateException.
+        (throw (platform/illegal-state-exception
                  (str "Could not open new session; :clone response: " resp))))))
 
 (defn client-session
@@ -148,7 +150,8 @@
     (try
       (assoc msg :value (read-string value))
       (catch Exception e
-        (throw (IllegalStateException. (str "Could not read response value: " value) e))))))
+        (throw (platform/illegal-state-exception
+                (str "Could not read response value: " value) e))))))
 
 (defn response-values
   "Given a seq of responses (as from response-seq or returned from any function returned

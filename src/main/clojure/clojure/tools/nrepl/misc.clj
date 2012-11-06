@@ -6,11 +6,11 @@
 (try
   (require 'clojure.tools.logging)
   (defmacro log [& args] `(clojure.tools.logging/error ~@args))
-  (catch Throwable t
+  (catch Exception t
     ;(println "clojure.tools.logging not available, falling back to stdout/err")
     (defn log
       [ex & msgs]
-      (let [ex (when (instance? Throwable ex) ex)
+      (let [ex (when (instance? Exception ex) ex)
             msgs (if ex msgs (cons ex msgs))]
         (binding [*out* *err*]
           (apply println "ERROR:" msgs)
@@ -24,7 +24,8 @@
 (defn uuid
   "Returns a new UUID string."
   []
-  (str (java.util.UUID/randomUUID)))
+  ;;(str (java.util.UUID/randomUUID))
+  (str (Guid/NewGuid)))
 
 (defn response-for
   "Returns a map containing the :session and :id from the \"request\" `msg`
