@@ -7,16 +7,22 @@
 ;   the terms of this license.
 ;   You must not remove this notice, or any other, from this software.
 
+;; ns-mapping
+; (add-ns-load-mapping "clojure.tools"
+;                     "d:\\mtkoan\\dev\\tools.nrepl\\src\\main\\clojure\\clojure\\tools")
+
 (ns clojure.tools.nrepl.bencode-test
   (:import
-    java.io.ByteArrayInputStream
-    java.io.ByteArrayOutputStream
-    java.io.PushbackInputStream
-    clojure.lang.RT)
-  (:require [clojure.java.io :as io])
+   [System.IO Stream SeekOrigin MemoryStream]
+    ;java.io.ByteArrayInputStream
+    ;java.io.ByteArrayOutputStream
+    ;java.io.PushbackInputStream
+    clojure.lang.RT
+   )
+  (:require [clojure.clr.io :as io]
+            [clojure.tools.nrepl.bencode :as bencode])
   (:use
-    [clojure.test :only [deftest is are]]
-    [clojure.tools.nrepl.bencode :as bencode]))
+    [clojure.test :only [deftest is are]]))
 
 (defn #^{:private true} >bytes
   [#^String input]
@@ -28,8 +34,8 @@
   [input]
   input)
 
-(defmethod <bytes (RT/classForName "[B")
-  [#^"[B" input]
+(defmethod <bytes |System.Byte[]|
+  [#^|System.Byte[]| input]
   (String. input "UTF-8"))
 
 (defmethod <bytes clojure.lang.IPersistentVector
@@ -44,94 +50,101 @@
 
 (defn- decode
   [bytes & {:keys [reader]}]
-  (-> bytes
-    ByteArrayInputStream.
-    PushbackInputStream.
-    reader))
+  (reader (MemoryStream. bytes)))
+
+(defn get-bytes [string]
+  (let [bytes (byte-array (* 2 (.Length string)))]
+    (System.Buffer/BlockCopy (.ToCharArray string) 0 bytes 0 (.Length bytes))
+     bytes))
+
+(defn get-string [bytes]
+  (let [chars (char-array (/ (.Length bytes) 2))]
+    (System.Buffer/BlockCopy bytes 0 chars 0 (.Length bytes))
+    chars))
 
 (defn- >input
   [^String input & args]
   (-> input
-    (.getBytes "UTF-8")
-    (#(apply decode % args))
-    <bytes))
+      (get-bytes "UTF-8")
+      (#(apply decode % args))
+      <bytes))
 
 (deftest test-netstring-reading
-  (are [x y] (= (>input x :reader read-netstring) y)
+  (are [x y] (= (>input x :reader bencode/read-netstring) y)
     "0:,"                ""
     "13:Hello, World!,"  "Hello, World!"
     "16:Hällö, Würld!,"  "Hällö, Würld!"
     "25:Здравей, Свят!," "Здравей, Свят!"))
 
 (deftest test-string-reading
-  (are [x y] (= (>input x :reader read-bencode) y)
+  (are [x y] (= (>input x :reader bencode/read-bencode) y)
     "0:"                ""
     "13:Hello, World!"  "Hello, World!"
     "16:Hällö, Würld!"  "Hällö, Würld!"
     "25:Здравей, Свят!" "Здравей, Свят!"))
 
 (deftest test-integer-reading
-  (are [x y] (= (>input x :reader read-bencode) y)
+  (are [x y] (= (>input x :reader bencode/read-bencode) y)
     "i0e"     0
     "i42e"   42
     "i-42e" -42))
 
 (deftest test-list-reading
-  (are [x y] (= (>input x :reader read-bencode) y)
+  (are [x y] (= (>input x :reader bencode/read-bencode) y)
     "le"                    []
     "l6:cheesee"            ["cheese"]
     "l6:cheese3:ham4:eggse" ["cheese" "ham" "eggs"]))
 
 (deftest test-map-reading
-  (are [x y] (= (>input x :reader read-bencode) y)
+  (are [x y] (= (>input x :reader bencode/read-bencode) y)
     "de"            {}
     "d3:ham4:eggse" {"ham" "eggs"}))
 
 (deftest test-nested-reading
-  (are [x y] (= (>input x :reader read-bencode) y)
+  (are [x y] (= (>input x :reader bencode/read-bencode) y)
     "l6:cheesei42ed3:ham4:eggsee" ["cheese" 42 {"ham" "eggs"}]
     "d6:cheesei42e3:haml4:eggsee" {"cheese" 42 "ham" ["eggs"]}))
 
 (defn- >stream
   [thing & {:keys [writer]}]
-  (doto (ByteArrayOutputStream.)
+  (doto (MemoryStream.)
     (writer thing)))
 
 (defn- >output
   [& args]
-  (.toString (apply >stream args) "UTF-8"))
+  (get-string (apply >stream args) "UTF-8"))
 
 (deftest test-netstring-writing
-  (are [x y] (= (>output (>bytes x) :writer write-netstring) y)
+  (are [x y] (= (>output (>bytes x) :writer bencode/write-netstring) y)
     ""               "0:,"
     "Hello, World!"  "13:Hello, World!,"
     "Hällö, Würld!"  "16:Hällö, Würld!,"
     "Здравей, Свят!" "25:Здравей, Свят!,"))
 
 (deftest test-byte-array-writing
-  (are [x y] (= (>output (>bytes x) :writer write-bencode) y)
+  (are [x y] (= (>output (>bytes x) :writer bencode/write-bencode) y)
     ""               "0:"
     "Hello, World!"  "13:Hello, World!"
     "Hällö, Würld!"  "16:Hällö, Würld!"
     "Здравей, Свят!" "25:Здравей, Свят!"))
 
 (deftest test-string-writing
-  (are [x y] (= (>output x :writer write-bencode) y)
+  (are [x y] (= (>output x :writer bencode/write-bencode) y)
     ""               "0:"
     "Hello, World!"  "13:Hello, World!"
     "Hällö, Würld!"  "16:Hällö, Würld!"
     "Здравей, Свят!" "25:Здравей, Свят!"))
 
 (deftest test-input-stream-writing
-  (are [x y] (= (>output (ByteArrayInputStream. (>bytes x))
-                         :writer write-bencode) y)
+  (are [x y] (= (>output (MemoryStream. (>bytes x))
+                         :writer bencode/write-bencode) y)
     ""               "0:"
     "Hello, World!"  "13:Hello, World!"
     "Hällö, Würld!"  "16:Hällö, Würld!"
     "Здравей, Свят!" "25:Здравей, Свят!"))
 
 (deftest test-integer-writing
-  (are [x y] (= (>output x :writer write-bencode) y)
+  (are [x y] (= (>output x :writer bencode/write-bencode) y)
       0 "i0e"
      42 "i42e"
     -42 "i-42e"
@@ -139,32 +152,32 @@
     ; Works for all integral types.
     ; Note: BigInts (42N) not tested, since they are not
     ; supported in 1.2.
-    (Byte. "42")    "i42e"
-    (Short. "42")   "i42e"
-    (Integer. "42") "i42e"
-    (Long. "42")    "i42e"))
+    (byte  "42")    "i42e"
+    (short  "42")   "i42e"
+    (int "42") "i42e"
+    (long  "42")    "i42e"))
 
 (deftest test-named-writing
-  (are [x y] (= (>output x :writer write-bencode) y)
+  (are [x y] (= (>output x :writer bencode/write-bencode) y)
     :foo      "3:foo"
     :foo/bar  "7:foo/bar"
     'foo      "3:foo"
     'foo/bar  "7:foo/bar"))
 
 (deftest test-list-writing
-  (are [x y] (= (>output x :writer write-bencode) y)
+  (are [x y] (= (>output x :writer bencode/write-bencode) y)
     nil                     "le"
     []                      "le"
     ["cheese"]              "l6:cheesee"
     ["cheese" "ham" "eggs"] "l6:cheese3:ham4:eggse"))
 
 (deftest test-map-writing
-  (are [x y] (= (>output x :writer write-bencode) y)
+  (are [x y] (= (>output x :writer bencode/write-bencode) y)
     {}             "de"
     {"ham" "eggs"} "d3:ham4:eggse"))
 
 (deftest test-nested-writing
-  (are [x y] (= (>output x :writer write-bencode) y)
+  (are [x y] (= (>output x :writer bencode/write-bencode) y)
     ["cheese" 42 {"ham" "eggs"}] "l6:cheesei42ed3:ham4:eggsee"
     {"cheese" 42 "ham" ["eggs"]} "d6:cheesei42e3:haml4:eggsee"))
 
@@ -190,8 +203,9 @@
                       (into-array Byte/TYPE))]
     (is (= (seq binary-data)
            (-> {"data" binary-data}
-             (>stream :writer write-bencode)
+             (>stream :writer bencode/write-bencode)
              .toByteArray
-             (decode :reader read-bencode)
+             (decode :reader bencode/read-bencode)
              (get "data")
              seq)))))
+

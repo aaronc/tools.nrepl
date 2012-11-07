@@ -324,7 +324,7 @@
 
 (defmethod write-bencode :default
   [output x]
-  (throw (platform/illegal-argument-exception (str "Cannot write value of type " (class x)))))
+  (throw (System.ArgumentException. (str "Cannot write value of type " (class x)))))
 
 ;; The following methods should be pretty straight-forward.
 ;;
