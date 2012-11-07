@@ -14,6 +14,7 @@
 (ns clojure.tools.nrepl.bencode-test
   (:import
    [System.IO Stream SeekOrigin MemoryStream]
+   [System.Text Encoding]
     ;java.io.ByteArrayInputStream
     ;java.io.ByteArrayOutputStream
     ;java.io.PushbackInputStream
@@ -26,7 +27,7 @@
 
 (defn #^{:private true} >bytes
   [#^String input]
-  (.getBytes input "UTF-8"))
+  (.GetBytes Encoding/UTF8 input))
 
 (defmulti #^{:private true} <bytes class)
 
@@ -36,7 +37,7 @@
 
 (defmethod <bytes |System.Byte[]|
   [#^|System.Byte[]| input]
-  (String. input "UTF-8"))
+  (.GetString Encoding/UTF8 input))
 
 (defmethod <bytes clojure.lang.IPersistentVector
   [input]
@@ -53,19 +54,15 @@
   (reader (MemoryStream. bytes)))
 
 (defn get-bytes [string]
-  (let [bytes (byte-array (* 2 (.Length string)))]
-    (System.Buffer/BlockCopy (.ToCharArray string) 0 bytes 0 (.Length bytes))
-     bytes))
+  (.GetBytes Encoding/UTF8 string))
 
 (defn get-string [bytes]
-  (let [chars (char-array (/ (.Length bytes) 2))]
-    (System.Buffer/BlockCopy bytes 0 chars 0 (.Length bytes))
-    chars))
+  (.GetString Encoding/UTF8 bytes))
 
 (defn- >input
   [^String input & args]
   (-> input
-      (get-bytes "UTF-8")
+      (get-bytes)
       (#(apply decode % args))
       <bytes))
 
@@ -73,15 +70,15 @@
   (are [x y] (= (>input x :reader bencode/read-netstring) y)
     "0:,"                ""
     "13:Hello, World!,"  "Hello, World!"
-    "16:Hällö, Würld!,"  "Hällö, Würld!"
-    "25:Здравей, Свят!," "Здравей, Свят!"))
+    "17:Hällö, Würld!,"  "Hällö, Würld!"
+    "14:Здравей, Свят!," "Здравей, Свят!"))
 
 (deftest test-string-reading
   (are [x y] (= (>input x :reader bencode/read-bencode) y)
     "0:"                ""
     "13:Hello, World!"  "Hello, World!"
-    "16:Hällö, Würld!"  "Hällö, Würld!"
-    "25:Здравей, Свят!" "Здравей, Свят!"))
+    "17:Hällö, Würld!"  "Hällö, Würld!"
+    "14:Здравей, Свят!" "Здравей, Свят!"))
 
 (deftest test-integer-reading
   (are [x y] (= (>input x :reader bencode/read-bencode) y)
@@ -112,36 +109,36 @@
 
 (defn- >output
   [& args]
-  (get-string (apply >stream args) "UTF-8"))
+  (get-string (.ToArray (apply >stream args))))
 
 (deftest test-netstring-writing
   (are [x y] (= (>output (>bytes x) :writer bencode/write-netstring) y)
     ""               "0:,"
     "Hello, World!"  "13:Hello, World!,"
-    "Hällö, Würld!"  "16:Hällö, Würld!,"
-    "Здравей, Свят!" "25:Здравей, Свят!,"))
+    "Hällö, Würld!"  "17:Hällö, Würld!,"
+    "Здравей, Свят!" "14:Здравей, Свят!,"))
 
 (deftest test-byte-array-writing
   (are [x y] (= (>output (>bytes x) :writer bencode/write-bencode) y)
     ""               "0:"
     "Hello, World!"  "13:Hello, World!"
-    "Hällö, Würld!"  "16:Hällö, Würld!"
-    "Здравей, Свят!" "25:Здравей, Свят!"))
+    "Hällö, Würld!"  "17:Hällö, Würld!"
+    "Здравей, Свят!" "14:Здравей, Свят!"))
 
 (deftest test-string-writing
   (are [x y] (= (>output x :writer bencode/write-bencode) y)
     ""               "0:"
     "Hello, World!"  "13:Hello, World!"
-    "Hällö, Würld!"  "16:Hällö, Würld!"
-    "Здравей, Свят!" "25:Здравей, Свят!"))
+    "Hällö, Würld!"  "17:Hällö, Würld!"
+    "Здравей, Свят!" "14:Здравей, Свят!"))
 
 (deftest test-input-stream-writing
   (are [x y] (= (>output (MemoryStream. (>bytes x))
                          :writer bencode/write-bencode) y)
     ""               "0:"
     "Hello, World!"  "13:Hello, World!"
-    "Hällö, Würld!"  "16:Hällö, Würld!"
-    "Здравей, Свят!" "25:Здравей, Свят!"))
+    "Hällö, Würld!"  "17:Hällö, Würld!"
+    "Здравей, Свят!" "14:Здравей, Свят!"))
 
 (deftest test-integer-writing
   (are [x y] (= (>output x :writer bencode/write-bencode) y)
@@ -193,18 +190,13 @@
 (deftest unencoded-values
   ; just some PNG data that won't round-trip cleanly through UTF-8 encoding, so
   ; any default encoding in the bencode implementation will be caught immediately
-  (let [binary-data (->> [-119 80 78 71 13 10 26 10 0 0 0 13 73 72 68 82 0 0 0
-                          100 0 0 0 100 8 6 0 0 0 112 -30 -107 84 0 0 3 -16 105
-                          67 67 80 73 67 67 32 80 114 111 102 105 108 101 0 0 40
-                          -111 -115 85 -35 111 -37 84 20 63 -119 111 92 -92 22 63
-                          -96 -79 -114 14 21 -117 -81 85 83 91 -71 27 26 -83 -58 6
-                          73 -109 -91 -23 66 26 -71 -51 -40 42 -92 -55 117 110]
+  (let [binary-data (->> [ 137 80 78 71 13 10 26 10 0 0 0 13 73 72 68 82 0 0 0 100 0 0 0 100 8 6 0 0 0 112 226 149 84 0 0 3 240 105 67 67 80 73 67 67 32 80 114 111 102 105 108 101 0 0 40 145 141 85 221 111 219 84 20 63 137 111 92 164 22 63 160 177 142 14 21 139 175 85 83 91 185 27 26 173 198 6 73 147 165 233 66 26 185 205 216 42 164 201 117 110 ]
                       (map byte)
-                      (into-array Byte/TYPE))]
+                      (into-array Byte))]
     (is (= (seq binary-data)
            (-> {"data" binary-data}
              (>stream :writer bencode/write-bencode)
-             .toByteArray
+             .ToArray
              (decode :reader bencode/read-bencode)
              (get "data")
              seq)))))

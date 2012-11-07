@@ -17,6 +17,7 @@
     ])
   (:import
    [System.IO Stream SeekOrigin MemoryStream]
+   [System.Text Encoding]
     ;java.io.ByteArrayOutputStream
     ;java.io.InputStream
     ;java.io.OutputStream
@@ -101,7 +102,7 @@
     (loop [offset (int 0)
            len    (int n)]
       (let [result (.Read input content offset len)]
-        (when (<= result 0)
+        (when (< result 0)
           (throw
             (Exception.
               "Invalid netstring. Less data available than expected.")))
@@ -168,11 +169,11 @@
 
 (defn #^{:private true :tag |System.Byte[]|} string>payload
   [#^String s]
-  (.getBytes s "UTF-8"))
+  (.GetBytes Encoding/UTF8 s))
 
 (defn #^{:private true :tag String} string<payload
   [#^|System.Byte[]| b]
-  (String. b "UTF-8"))
+  (.GetString Encoding/UTF8 b))
 
 ;; ## Writing a netstring
 ;;
@@ -394,11 +395,11 @@
   (let [translation (into {} (map (juxt string>payload identity) (keys m)))
         key-strings (sort lexicographically (keys translation))
         >value      (comp m translation)]
-    (.write output (int d))
+    (.WriteByte output (byte d))
     (doseq [k key-strings]
       (write-netstring* output k)
       (write-bencode output (>value k)))
-    (.write output (int e))))
+    (.WriteByte output (byte e))))
 
 ;; However, since byte arrays are not `Comparable` we need a custom
 ;; comparator which we can feed to `sort`.
