@@ -104,7 +104,7 @@
       (let [result (.Read input content offset len)]
         (when (< result 0)
           (throw
-            (Exception.
+            (EOFException.
               "Invalid netstring. Less data available than expected.")))
         (when (not= result len)
           (recur (+ offset result) (- len result)))))
@@ -160,7 +160,7 @@
   [input]
   (let [content (read-netstring* input)]
     (when (not= (read-byte input) comma)
-      (throw (Exception. "Invalid netstring. ',' expected.")))
+      (throw (IOException. "Invalid netstring. ',' expected.")))
     content))
 
 ;; Similarly the `string>payload` and `string<payload` functions

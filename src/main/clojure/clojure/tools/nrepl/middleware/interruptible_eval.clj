@@ -8,9 +8,8 @@
   (:import clojure.lang.LineNumberingPushbackReader
            (java.io StringReader Writer)
            java.util.concurrent.atomic.AtomicLong
-           (java.util.concurrent LinkedBlockingQueue
-                                 TimeUnit ThreadPoolExecutor
-                                 ThreadFactory)))
+           (java.util.concurrent Executor LinkedBlockingQueue ThreadFactory
+                                 SynchronousQueue TimeUnit ThreadPoolExecutor)))
 
 (def ^{:dynamic true
        :doc "The message currently being evaluated."}
@@ -51,7 +50,7 @@
             :read (if (string? code)
                     (let [reader (LineNumberingPushbackReader. (StringReader. code))]
                       #(read reader false %2))
-                    (let [code (.iterator code)]
+                    (let [^java.util.Iterator code (.iterator code)]
                       #(or (and (.hasNext code) (.next code)) %2)))
             :prompt (fn [])
             :need-prompt (constantly false)
@@ -96,13 +95,15 @@
                               true
                               (catch ClassNotFoundException e false)))
 
+; this is essentially the same as Executors.newCachedThreadPool, except
+; for the JDK 5/6 fix described below
 (defn- configure-executor
   "Returns a ThreadPoolExecutor, configured (by default) to
    have no core threads, use an unbounded queue, create only daemon threads,
    and allow unused threads to expire after 30s."
   [& {:keys [keep-alive queue thread-factory]
       :or {keep-alive 30000
-           queue (LinkedBlockingQueue.)}}]
+           queue (SynchronousQueue.)}}]
   ; ThreadPoolExecutor in JDK5 *will not run* submitted jobs if the core pool size is zero and
   ; the queue has not yet rejected a job (see http://kirkwylie.blogspot.com/2008/10/java5-vs-java6-threadpoolexecutor.html)
   (ThreadPoolExecutor. (if jdk6? 0 1) Integer/MAX_VALUE
@@ -121,7 +122,7 @@
 
 (declare run-next)
 (defn- run-next*
-  [session executor]
+  [session ^Executor executor]
   (let [qa (-> session meta :queue)]
     (loop []
       (let [q @qa
@@ -140,7 +141,7 @@
 
 (defn- queue-eval
   "Queues the function for the given session."
-  [session executor f]
+  [session ^Executor executor f]
   (let [qa (-> session prep-session meta :queue)]
     (loop []
       (let [q @qa]

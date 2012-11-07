@@ -175,7 +175,7 @@
   {:pre [transport-fn port]}
   (transport-fn (java.net.Socket. ^String host (int port))))
 
-(defn- to-uri
+(defn- ^java.net.URI to-uri
   [x]
   {:post [(instance? java.net.URI %)]}
   (if (string? x)
@@ -234,16 +234,3 @@
         (re-find #"(\d+)\.(\d+)\.(\d+)-?(.*)")
         rest
         (zipmap [:major :minor :incremental :qualifier])))))
-
-
-;; TODO session expiration
-;; Ideas:
-;; - tools
-;;   - support syntax-quoting of vals in eval-msg
-;; - transports
-;;   - JMX
-;;   - STOMP?
-;;   - websockets (although, is this interesting at all given an HTTP option?)
-;; - cmdline
-;;   - support for connecting to a server
-;;   - optionally running other clojure script(s)/java mains prior to starting/connecting to a server

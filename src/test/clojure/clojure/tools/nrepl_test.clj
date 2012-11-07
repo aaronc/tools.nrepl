@@ -1,24 +1,25 @@
 (ns clojure.tools.nrepl-test
+  (:import java.net.SocketException)
   (:use clojure.test
         clojure.tools.nrepl)
   (:require (clojure.tools.nrepl [transport :as transport]
                                  [server :as server]
                                  [ack :as ack])))
 
-(def ^{:dynamic true} *server-port* nil)
+(def ^{:dynamic true} *server* nil)
 
 (defn repl-server-fixture
   [f]
   (with-open [server (server/start-server)]
-    (binding [*server-port* (.getLocalPort (:ss @server))]
+    (binding [*server* server]
       (f))))
 
-(use-fixtures :once repl-server-fixture)
+(use-fixtures :each repl-server-fixture)
 
 (defmacro def-repl-test
   [name & body]
   `(deftest ~(with-meta name {:private true})
-     (with-open [transport# (connect :port *server-port*)]
+     (with-open [transport# (connect :port (:port *server*))]
        (let [~'transport transport#
              ~'client (client transport# Long/MAX_VALUE)
              ~'session (client-session ~'client)
@@ -206,13 +207,97 @@
     (is (= [true] (repl-values session "halted?")))))
 
 (def-repl-test read-timeout
-  (is (nil? (repl-values timeout-session "(Thread/sleep 1100)"))))
+  (is (nil? (repl-values timeout-session "(Thread/sleep 1100) :ok")))
+  ; just getting the values off of the wire so the server side doesn't
+  ; toss a spurious stack trace when the client disconnects
+  (is (= [nil :ok] (->> (repeatedly #(transport/recv transport 500))
+                     (take-while (complement nil?))
+                     response-values))))
 
-(def-repl-test ensure-closeable
+(def-repl-test concurrent-message-handling
+  (testing "multiple messages can be handled on the same connection concurrently"
+    (let [sessions (doall (repeatedly 3 #(client-session client)))
+          start-time (System/currentTimeMillis)
+          elapsed-times (map (fn [session eval-duration]
+                               (let [expr (pr-str `(Thread/sleep ~eval-duration))
+                                     responses (message session {:op :eval :code expr})]
+                                 (future
+                                   (is (= [nil] (response-values responses)))
+                                   (- (System/currentTimeMillis) start-time))))
+                             sessions
+                             [2000 1000 0])]
+      (is (apply > (map deref (doall elapsed-times)))))))
+
+(def-repl-test ensure-transport-closeable
   (is (= [5] (repl-values session "5")))
   (is (instance? java.io.Closeable transport))
   (.close transport)
   (is (thrown? java.net.SocketException (repl-values session "5"))))
+
+; test is flaking on hudson, but passing locally! :-X
+#_(def-repl-test ensure-server-closeable
+  (.close *server*)
+  (is (thrown? java.net.ConnectException (connect :port (:port *server*)))))
+
+; wasn't added until Clojure 1.3.0
+(defn- root-cause
+  "Returns the initial cause of an exception or error by peeling off all of
+  its wrappers"
+  [^Throwable t]
+  (loop [cause t]
+    (if-let [cause (.getCause cause)]
+      (recur cause)
+      cause)))
+
+(defn- disconnection-exception?
+  [e]
+  ; thrown? should check for the root cause!
+  (and (instance? SocketException (root-cause e))
+       (re-matches #".*lost.*connection.*" (.getMessage (root-cause e)))))
+
+(deftest transports-fail-on-disconnects
+  (testing "Ensure that transports fail ASAP when the server they're connected to goes down."
+    (let [server (server/start-server)
+          transport (connect :port (:port server))]
+      (transport/send transport {"op" "eval" "code" "(+ 1 1)"})
+      
+      (let [reader (future (while true (transport/recv transport)))]
+        (Thread/sleep 1000)
+        (.close server)
+        (Thread/sleep 1000)
+        ; no deref with timeout in Clojure 1.2.0 :-(
+        (try
+          (.get reader 10000 java.util.concurrent.TimeUnit/MILLISECONDS)
+          (is false "A reader started prior to the server closing should throw an error...")
+          (catch Throwable e
+            (is (disconnection-exception? e)))))
+      
+      (is (thrown? SocketException (transport/recv transport)))
+      ;; TODO no idea yet why two sends are *sometimes* required to get a failure
+      (try
+        (transport/send transport {"op" "eval" "code" "(+ 5 1)"})
+        (catch Throwable t))
+      (is (thrown? SocketException (transport/send transport {"op" "eval" "code" "(+ 5 1)"}))))))
+
+(def-repl-test clients-fail-on-disconnects
+  (testing "Ensure that clients fail ASAP when the server they're connected to goes down."
+    (let [resp (repl-eval client "1 2 3 4 5 6 7 8 9 10")]
+      (is (= "1" (-> resp first :value)))
+      (Thread/sleep 1000)
+      (.close *server*)
+      (Thread/sleep 1000)
+      (try
+        ; these responses were on the wire before the remote transport was closed
+        (is (> 20 (count resp)))
+        (transport/recv transport)
+        (is false "reads after the server is closed should fail")
+        (catch Throwable t
+          (is (disconnection-exception? t)))))
+    
+    ;; TODO as noted in transports-fail-on-disconnects, *sometimes* two sends are needed
+    ;; to trigger an exception on send to an unavailable server
+    (try (repl-eval session "(+ 1 1)") (catch Throwable t))
+    (is (thrown? SocketException (repl-eval session "(+ 1 1)")))))
 
 (def-repl-test request-*in*
   (is (= '((1 2 3)) (response-values (for [resp (repl-eval session "(read)")]
@@ -245,15 +330,15 @@
   (is (= [" :kthxbai"] (repl-values session "(read-line)"))))
 
 (def-repl-test test-url-connect
-  (with-open [conn (url-connect (str "nrepl://localhost:" *server-port*))]
+  (with-open [conn (url-connect (str "nrepl://localhost:" (:port *server*)))]
     (transport/send conn {:op :eval :code "(+ 1 1)"})
     (is (= [2] (response-values (response-seq conn 100))))))
 
 (deftest test-ack
   (with-open [s (server/start-server :handler (ack/handle-ack (server/default-handler)))]
     (ack/reset-ack-port!)
-    (with-open [s2 (server/start-server :ack-port (.getLocalPort (:ss @s)))]
-      (is (= (.getLocalPort (:ss @s2)) (ack/wait-for-ack 10000))))))
+    (with-open [s2 (server/start-server :ack-port (:port s))]
+      (is (= (:port s2) (ack/wait-for-ack 10000))))))
 
 (def-repl-test agent-await
   (is (= [42] (repl-values session (code (let [a (agent nil)]

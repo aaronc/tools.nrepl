@@ -7,22 +7,32 @@
   (:use [clojure.tools.nrepl.misc :only (returning uuid)])
   (:refer-clojure :exclude (send))
   (:import (java.io InputStream OutputStream PushbackInputStream
-                    PushbackReader)
-           java.net.Socket
+                    PushbackReader IOException EOFException)
+           (java.net Socket SocketException)
            (java.util.concurrent SynchronousQueue LinkedBlockingQueue
                               BlockingQueue TimeUnit)
         clojure.lang.RT))
 
+  ;; TODO this keywordization/stringification has no business being in FnTransport
 (defn fn-transport
-"Returns a Transport implementation that delegates its functionality
-to the 2 or 3 functions provided."
-([read write] (fn-transport read write nil))
-([read write close]
- (let [read-queue (synchronous-queue)]
-   (future (while true
-             (platform/queue-put read-queue (read))))
-   (FnTransport.
-     #(platform/queue-poll read-queue % TimeUnit/MILLISECONDS)
+  "Returns a Transport implementation that delegates its functionality
+   to the 2 or 3 functions provided."
+  ([read write] (fn-transport read write nil))
+  ([read write close]
+    (let [read-queue (SynchronousQueue.)]
+      (future (try
+                (while true
+                  (.put read-queue (read)))
+                (catch Throwable t
+                  (.put read-queue t))))
+      (FnTransport.
+        (let [failure (atom nil)]
+          #(if @failure
+             (throw @failure)
+             (let [msg (.poll read-queue % TimeUnit/MILLISECONDS)]
+               (if (instance? Throwable msg)
+                 (do (reset! failure msg) (throw msg))
+                 msg))))
      write
      close))))
 
@@ -47,6 +57,17 @@ input)
  (map (fn [[k v]] [k (<bytes v)]))
  (into {})))
 
+(defmacro ^{:private true} rethrow-on-disconnection
+  [^Socket s & body]
+  `(try
+     ~@body
+     (catch EOFException e#
+       (throw (SocketException. "The transport's socket appears to have lost its connection to the nREPL server")))
+     (catch Throwable e#
+       (if (and ~s (not (.isConnected ~s)))
+         (throw (SocketException. "The transport's socket appears to have lost its connection to the nREPL server"))
+         (throw e#)))))
+
 (defn bencode
 "Returns a Transport implementation that serializes messages
 over the given Socket or InputStream/OutputStream using bencode."
@@ -56,15 +77,17 @@ over the given Socket or InputStream/OutputStream using bencode."
        out (io/output-stream out)]
    (fn-transport
      #(let [payload   (be/read-bencode in)
+        #(let [payload (rethrow-on-disconnection s (be/read-bencode in))
             unencoded (<bytes (payload "-unencoded"))
             to-decode (apply dissoc payload "-unencoded" unencoded)]
         (merge (dissoc payload "-unencoded")
                (when unencoded {"-unencoded" unencoded})
                (<bytes to-decode)))
-     #(locking out
-        (doto out
-          (be/write-bencode %)
-          .flush))
+        #(rethrow-on-disconnection s
+           (locking out
+             (doto out
+               (be/write-bencode %)
+               .flush)))
      (fn []
        (.close in)
        (.close out)
