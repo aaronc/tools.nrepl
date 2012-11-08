@@ -9,7 +9,7 @@
 (ns ^{:author "Chas Emerick"}
   clojure.tools.nrepl.helpers
   (:require [clojure.tools.nrepl.middleware.load-file :as load-file])
-  (:import (java.io File StringReader)))
+  (:import (System.IO FileInfo StringReader)))
 
 (defn load-file-command
   "(If it is available, sending clojure.tools.nrepl.middleware.load-file
@@ -33,18 +33,18 @@
      (load-file-command \"…code here…\" \"some/ns/name/file.clj\" \"file.clj\")"
   ([f] (load-file-command f nil))
   ([f source-root]
-    (let [^String abspath (if (string? f) f (.getAbsolutePath ^File f))
+    (let [^String abspath (if (string? f) f (.FullName ^FileInfo f))
           source-root (cond
                           (nil? source-root) ""
                           (string? source-root) source-root
-                          (instance? File source-root) (.getAbsolutePath ^File source-root))]
+                          (instance? FileInfo source-root) (.getAbsolutePath ^FileInfo source-root))]
       (load-file-command (slurp abspath :encoding "UTF-8")
         (if (and (seq source-root)
-              (.startsWith abspath source-root))
+              (.StartsWith abspath source-root))
           (-> abspath
-            (.substring (count source-root))
-            (.replaceAll "^[/\\\\]" ""))
+            (.Substring (count source-root))
+            (.Replace "^[/\\\\]" ""))
           abspath)
-        (-> abspath File. .getName))))
+        (-> abspath FileInfo. .Name))))
   ([code file-path file-name]
     (load-file/load-file-code code file-path file-name)))

@@ -8,7 +8,7 @@
 
 (ns ^{:author "Chas Emerick"}
   clojure.tools.nrepl.helpers-test
-  (:import (java.io File))
+  (:import (System.IO FileInfo))
   (:use [clojure.tools.nrepl-test :only (def-repl-test repl-server-fixture)]
     clojure.test)
   (:require

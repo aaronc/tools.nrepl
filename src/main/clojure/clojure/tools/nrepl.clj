@@ -11,12 +11,10 @@
   clojure.tools.nrepl
   (:require [clojure.tools.nrepl.transport :as transport]
             clojure.set
-            [clojure.java.io :as io]
-            [clojure.tools.nrepl.platform :as platform])
+            [clojure.clr.io :as io])
   (:use [clojure.tools.nrepl.misc :only (uuid)])
-  (:import clojure.lang.LineNumberingPushbackReader
-           (System.IO )
-           (comment (java.io Reader StringReader Writer PrintWriter))))
+  (:import
+   [System.Net.Sockets TcpClient]))
 
 (defn response-seq
   "Returns a lazy seq of messages received via the given Transport.
@@ -24,7 +22,7 @@
    The seq will end only when the underlying Transport is closed (i.e.
    returns nil from `recv`) or if a message takes longer than `timeout`
    millis to arrive."
-  ([transport] (response-seq transport platform/long-max-value))
+  ([transport] (response-seq transport Int64/MaxValue))
   ([transport timeout]
     (take-while identity (repeatedly #(transport/recv transport timeout)))))
 
@@ -43,7 +41,7 @@
                            [now %]
                            head))
                        ; nanoTime appropriate here; looking to maintain ordering, not actual timestamps
-                       (platform/ticks))
+                       (.Ticks DateTime/Now))
         tracking-seq (fn tracking-seq [responses]
                        (lazy-seq
                          (if (seq responses)
@@ -97,7 +95,7 @@
   [client & {:keys [clone]}]
   (let [resp (first (message client (merge {:op "clone"} (when clone {:session clone}))))]
     (or (:new-session resp)
-        (throw (platform/illegal-state-exception
+        (throw (InvalidOperationException.
                  (str "Could not open new session; :clone response: " resp))))))
 
 (defn client-session
@@ -150,7 +148,7 @@
     (try
       (assoc msg :value (read-string value))
       (catch Exception e
-        (throw (platform/illegal-state-exception
+        (throw (InvalidOperationException.
                 (str "Could not read response value: " value) e))))))
 
 (defn response-values
@@ -173,24 +171,24 @@
   [& {:keys [port host transport-fn] :or {transport-fn transport/bencode
                                           host "localhost"}}]
   {:pre [transport-fn port]}
-  (transport-fn (java.net.Socket. ^String host (int port))))
+  (transport-fn (TcpClient. ^String host (int port))))
 
-(defn- ^java.net.URI to-uri
+(defn- ^Uri to-uri
   [x]
-  {:post [(instance? java.net.URI %)]}
+  {:post [(instance? Uri %)]}
   (if (string? x)
-    (java.net.URI. x)
+    (Uri. x)
     x))
 
 (defn- socket-info
   [x]
   (let [uri (to-uri x)
-        port (.getPort uri)]
-    (merge {:host (.getHost uri)}
+        port (.Port uri)]
+    (merge {:host (.Host uri)}
            (when (pos? port)
              {:port port}))))
 
-(def ^{:private false} uri-scheme #(-> (to-uri %) .getScheme .toLowerCase))
+(def ^{:private false} uri-scheme #(-> (to-uri %) .Scheme .ToLower))
 
 (defmulti url-connect
   "Connects to an nREPL endpoint identified by the given URL/URI.  Valid
@@ -219,18 +217,13 @@
 
 (add-socket-connect-method! "nrepl" {:transport-fn transport/bencode
                                      :port 7888})
-(add-socket-connect-method! "telnet" {:transport-fn transport/tty})
+(comment (add-socket-connect-method! "telnet" {:transport-fn transport/tty}))
 
 (defmethod url-connect :default
   [uri]
-  (throw (IllegalArgumentException.
+  (throw (ArgumentException.
            (format "No nREPL support known for scheme %s, url %s" (uri-scheme uri) uri))))
 
 (def ^{:doc "Current version of nREPL, map of :major, :minor, :incremental, and :qualifier."}
-      version
-  (when-let [in (.getResourceAsStream (class connect) "/clojure/tools/nrepl/version.txt")]
-    (with-open [^java.io.BufferedReader reader (io/reader in)]
-      (->> (.readLine reader)
-        (re-find #"(\d+)\.(\d+)\.(\d+)-?(.*)")
-        rest
-        (zipmap [:major :minor :incremental :qualifier])))))
+  version
+  {:major 0 :minor 0 :incremental 2 :qualifier "SNAPSHOT"})

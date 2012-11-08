@@ -7,16 +7,19 @@
                                  [middleware :as middleware])
             (clojure.tools.nrepl.middleware interruptible-eval
                                             pr-values
-                                            session
+                   ;;                         session
                                             load-file))
   (:use [clojure.tools.nrepl.misc :only (returning response-for log)])
-  (:import (java.net Socket ServerSocket InetSocketAddress)))
+  ;;(:import (java.net Socket ServerSocket InetSocketAddress))
+  (:import
+   [System.Net Dns]
+   [System.Net.Sockets TcpListener]))
 
 (defn handle*
   [msg handler transport]
   (try
     (handler (assoc msg :transport transport))
-    (catch Throwable t
+    (catch Exception t
       (log t "Unhandled REPL handler exception processing message" msg))))
 
 (defn handle
@@ -28,10 +31,10 @@
     (recur handler transport)))
 
 (defn- accept-connection
-  [{:keys [^ServerSocket server-socket open-transports transport greeting handler]
+  [{:keys [^TcpListener server-socket open-transports transport greeting handler]
     :as server}]
-  (when-not (.isClosed server-socket)
-    (let [sock (.accept server-socket)]
+  (when-not false ;;(.isClosed server-socket)
+    (let [sock (.AcceptTcpClient server-socket)]
       (future (let [transport (transport sock)]
                 (try
                   (swap! open-transports conj transport)
@@ -39,21 +42,21 @@
                   (handle handler transport)
                   (finally
                     (swap! open-transports disj transport)
-                    (.close transport)))))
+                    (.Dispose transport)))))
       (future (accept-connection server)))))
 
 (defn- safe-close
-  [^java.io.Closeable x]
+  [x]
   (try
-    (.close x)
-    (catch java.io.IOException e
+    (.Close x)
+    (catch Exception e
       (log e "Failed to close " x))))
 
 (defn stop-server
   "Stops a server started via `start-server`."
   [{:keys [open-transports ^ServerSocket server-socket] :as server}]
   (returning server
-    (.close server-socket)
+    (.Close server-socket)
     (swap! open-transports #(reduce
                               (fn [s t]
                                 ; should always be true for the socket server...
@@ -98,8 +101,8 @@
       (h msg))))
 
 (defrecord Server [server-socket port open-transports transport greeting handler]
-  java.io.Closeable
-  (close [this] (stop-server this))
+  IDisposable
+  (Dispose [this] (stop-server this))
   ;; TODO here for backward compat with 0.2.x; drop eventually
   clojure.lang.IDeref
   (deref [this] this))
@@ -123,8 +126,11 @@
    The port that the server is open on is available in the :port slot of the
    server map (useful if the :port option is 0 or was left unspecified."
   [& {:keys [port bind transport-fn handler ack-port greeting-fn] :or {port 0}}]
-  (let [bind-addr (if bind (InetSocketAddress. bind port) (InetSocketAddress. port))
-        ss (ServerSocket. port 0 (.getAddress bind-addr))
+  (let [bind-addr (when bind (first (.AddressList (Dns/GetHostEntry bind))))
+        ss
+        (if bind-addr
+          (ServerSocket. bind-addr port)
+          (ServerSocket. port))
         server (assoc
                  (Server. ss
                           (.getLocalPort ss)

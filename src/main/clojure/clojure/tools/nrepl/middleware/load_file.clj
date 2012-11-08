@@ -24,23 +24,24 @@ be loaded."} file-contents (atom {}))
   ; mini TTL impl so that any code orphaned by errors that occur
   ; between here and the evaluation of the Compiler/load expression
   ; below are cleaned up on subsequent loads  
-  (let [t (System/currentTimeMillis)
+  (let [t (.Ticks (DateTime/Now))
         file-key ^{:t t} [file-path (gensym)]]
     (swap! file-contents
       (fn [file-contents]
         (let [expired-keys
               (filter
                 (comp #(and %
-                            (< 10000 (- (System/currentTimeMillis) %)))
+                            (< 100000000 (.Ticks (DateTime/Now))))
                       :t meta)
                 (keys file-contents))]
           (assoc (apply dissoc file-contents expired-keys)
                  file-key file))))
     (pr-str `(try
                (clojure.lang.Compiler/load
-                 (java.io.StringReader. (@@(var file-contents) '~file-key))
+                 (System.IO.StringReader. (@@(var file-contents) '~file-key))
                  ~file-path
-                 ~file-name)
+                 ~file-name
+                 ~file-path)
                (finally
                  (swap! @(var file-contents) dissoc '~file-key))))))
 
@@ -55,7 +56,7 @@ be loaded."} file-contents (atom {}))
    In such cases, see `load-file-code'`."
   [file file-path file-name]
   (apply format
-    "(clojure.lang.Compiler/load (java.io.StringReader. %s) %s %s)"
+    "(clojure.lang.Compiler/loadFile %s)"
     (map pr-str [file file-path file-name])))
 
 (defn wrap-load-file

@@ -5,11 +5,16 @@
             clojure.main)
   (:use [clojure.tools.nrepl.misc :only (response-for returning)]
         [clojure.tools.nrepl.middleware :only (set-descriptor!)])
-  (:import clojure.lang.LineNumberingPushbackReader
-           (java.io StringReader Writer)
-           java.util.concurrent.atomic.AtomicLong
-           (java.util.concurrent Executor LinkedBlockingQueue ThreadFactory
-                                 SynchronousQueue TimeUnit ThreadPoolExecutor)))
+  (:import
+   clojure.lang.LineNumberingTextReader
+   [System.IO StringReader TextWriter]
+   [System.Threading Thread ThreadInterruptedException
+    ThreadPool WaitCallback])
+  (comment (:import clojure.lang.LineNumberingPushbackReader
+                    (java.io StringReader Writer)
+                    java.util.concurrent.atomic.AtomicLong
+                    (java.util.concurrent Executor LinkedBlockingQueue ThreadFactory
+                                          SynchronousQueue TimeUnit ThreadPoolExecutor))))
 
 (def ^{:dynamic true
        :doc "The message currently being evaluated."}
@@ -48,10 +53,10 @@
                      (set! *3 (@bindings #'*3))
                      (set! *e (@bindings #'*e)))   
             :read (if (string? code)
-                    (let [reader (LineNumberingPushbackReader. (StringReader. code))]
+                    (let [reader (LineNumberingTextReader. (StringReader. code))]
                       #(read reader false %2))
-                    (let [^java.util.Iterator code (.iterator code)]
-                      #(or (and (.hasNext code) (.next code)) %2)))
+                    (let [^System.Collections.IEnumerator code (.GetEnumerator code)]
+                      #(or (when (.MoveNext code) (.Current code)) %2)))
             :prompt (fn [])
             :need-prompt (constantly false)
             ; TODO pretty-print?
@@ -60,56 +65,24 @@
                                              #'*3 *2
                                              #'*2 *1
                                              #'*1 v))
-                     (.flush ^Writer err)
-                     (.flush ^Writer out)
+                     (.flush ^TextWriter err)
+                     (.flush ^TextWriter out)
                      (t/send transport (response-for msg
                                                      {:value v
                                                       :ns (-> *ns* ns-name str)})))
             ; TODO customizable exception prints
             :caught (fn [e]
                       (let [root-ex (#'clojure.main/root-cause e)]
-                        (when-not (instance? ThreadDeath root-ex)
+                        (when-not (instance? ThreadInterruptedException root-ex)
                           (reset! bindings (assoc (get-thread-bindings) #'*e e))
                           (t/send transport (response-for msg {:status :eval-error
                                                                :ex (-> e class str)
                                                                :root-ex (-> root-ex class str)}))
                           (clojure.main/repl-caught e)))))
           (finally
-            (.flush ^Writer out)
-            (.flush ^Writer err)))))
+            (.Flush ^TextWriter out)
+            (.Flush ^TextWriter err)))))
     @bindings))
-
-(defn- configure-thread-factory
-  "Returns a new ThreadFactory for the given session.  This implementation
-   generates daemon threads, with names that include the session id."
-  []
-  (let [session-thread-counter (AtomicLong. 0)]
-    (reify ThreadFactory
-      (newThread [_ runnable]
-        (doto (Thread. runnable
-                (format "nREPL-worker-%s" (.getAndIncrement session-thread-counter)))
-          (.setDaemon true))))))
-
-(def ^{:private true} jdk6? (try
-                              (Class/forName "java.util.ServiceLoader")
-                              true
-                              (catch ClassNotFoundException e false)))
-
-; this is essentially the same as Executors.newCachedThreadPool, except
-; for the JDK 5/6 fix described below
-(defn- configure-executor
-  "Returns a ThreadPoolExecutor, configured (by default) to
-   have no core threads, use an unbounded queue, create only daemon threads,
-   and allow unused threads to expire after 30s."
-  [& {:keys [keep-alive queue thread-factory]
-      :or {keep-alive 30000
-           queue (SynchronousQueue.)}}]
-  ; ThreadPoolExecutor in JDK5 *will not run* submitted jobs if the core pool size is zero and
-  ; the queue has not yet rejected a job (see http://kirkwylie.blogspot.com/2008/10/java5-vs-java6-threadpoolexecutor.html)
-  (ThreadPoolExecutor. (if jdk6? 0 1) Integer/MAX_VALUE
-                       (long 30000) TimeUnit/MILLISECONDS
-                       queue
-                       (or thread-factory (configure-thread-factory))))
 
 ; A little mini-agent implementation. Needed because agents cannot be used to host REPL
 ; evaluation: http://dev.clojure.org/jira/browse/NREPL-17
@@ -122,7 +95,7 @@
 
 (declare run-next)
 (defn- run-next*
-  [session ^Executor executor]
+  [session]
   (let [qa (-> session meta :queue)]
     (loop []
       (let [q @qa
@@ -130,42 +103,43 @@
         (if-not (compare-and-set! qa q qn)
           (recur)
           (when (seq qn)
-            (.execute executor (run-next session executor (peek qn)))))))))
+            (ThreadPool/QueueUserWorkItem (run-next session (peek qn)))))))))
 
 (defn- run-next
   [session executor f]
-  #(try
-     (f)
-     (finally
-       (run-next* session executor))))
+  (gen-delegate WaitCallback [_]
+                (try
+                  (f)
+                  (finally
+                   (run-next* session executor)))))
 
 (defn- queue-eval
   "Queues the function for the given session."
-  [session ^Executor executor f]
+  [session f]
   (let [qa (-> session prep-session meta :queue)]
     (loop []
       (let [q @qa]
         (if-not (compare-and-set! qa q (conj q f))
           (recur)
           (when (empty? q)
-            (.execute executor (run-next session executor f))))))))
+            (ThreadPool/QueueUserWorkItem (run-next session f))))))))
 
 (defn interruptible-eval
   "Evaluation middleware that supports interrupts.  Returns a handler that supports
    \"eval\" and \"interrupt\" :op-erations that delegates to the given handler
    otherwise."
-  [h & {:keys [executor] :or {executor (configure-executor)}}]
+  [h & {:keys [executor]}]
   (fn [{:keys [op session interrupt-id id transport] :as msg}]
     (case op
       "eval"
       (if-not (:code msg)
         (t/send transport (response-for msg :status #{:error :no-code}))
-        (queue-eval session executor
+        (queue-eval session 
           (comp
             (partial reset! session)
             (fn []
               (alter-meta! session assoc
-                           :thread (Thread/currentThread)
+                           :thread (Thread/CurrentThread)
                            :eval-msg msg)
               (binding [*msg* msg]
                 (returning (dissoc (evaluate @session msg) #'*msg*)
@@ -189,7 +163,7 @@
               (t/send transport {:status #{:interrupted}
                                  :id (:id eval-msg)
                                  :session id})
-              (.stop thread)
+              (.Abort thread)
               (t/send transport (response-for msg :status #{:done}))))
           (t/send transport (response-for msg :status #{:error :interrupt-id-mismatch :done}))))
       

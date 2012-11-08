@@ -1,6 +1,6 @@
 (ns clojure.tools.nrepl.middleware
-  (:require ;; clojure.tools.nrepl
-   ;;[clojure.tools.nrepl.transport :as transport]
+  (:require  clojure.tools.nrepl
+   [clojure.tools.nrepl.transport :as transport]
    [clojure.tools.nrepl.misc :as misc]
    [clojure.set :as set])
   (:refer-clojure :exclude (comparator)))
@@ -63,7 +63,7 @@
                (comp seq (partial set/intersection ops) :handles)
                set)]
     (when (deps start)
-      (throw (IllegalArgumentException.
+      (throw (ArgumentException.
                (format "Middleware %s depends upon itself via %s"
                        (:implemented-by start)
                        dir))))

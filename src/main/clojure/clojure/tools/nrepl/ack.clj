@@ -1,13 +1,10 @@
 
 (ns clojure.tools.nrepl.ack
-  (:require ;[clojure.tools.nrepl :as repl]
-            ;[clojure.tools.nrepl.transport :as t]
+  (:require [clojure.tools.nrepl :as repl]
+            [clojure.tools.nrepl.transport :as t]
    )
   (:import
-   ;;(java.util.concurrent Future TimeUnit TimeoutException)
-   (clojure.lang Future)
-   ()
-   ))
+   (clojure.lang Future)))
 
 ; could be a lot fancier, but it'll do for now
 (def ^{:private true} ack-port-promise (atom nil))
@@ -50,4 +47,4 @@
       ; consume response from the server, solely to let that side
       ; finish cleanly without (by default) spewing a SocketException when
       ; the ack client goes away suddenly
-      (dorun (repl/message client {:op :ack :port my-port})))))
+      (dorun (repl/message client {:op :ack :port my-port}))))))

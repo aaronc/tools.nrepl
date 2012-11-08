@@ -8,8 +8,17 @@
   (:require (clojure main test)
             [clojure.tools.nrepl.transport :as t])
   (:import clojure.tools.nrepl.transport.Transport
-           (java.io PipedReader PipedWriter Reader Writer PrintWriter StringReader)
-           clojure.lang.LineNumberingPushbackReader))
+           [System.Text StringBuilder]
+           [System.IO StringWriter
+            MemoryStream StringReader Stream
+            TextReader TextWriter
+            StreamWriter StreamReader]
+           [System.IO.Pipes
+            AnonymousPipeServerStream
+            AnonymousPipeClientStream
+            PipeDirection]
+;;           (java.io PipedReader PipedWriter Reader Writer PrintWriter StringReader)
+           clojure.lang.LineNumberingTextReader))
 
 (def ^{:private true} sessions (atom {}))
 
@@ -27,27 +36,22 @@
    given transport in messages specifying the given session-id.
    `channel-type` should be :out or :err, as appropriate."
   [channel-type session-id transport]
-  (let [buf (clojure.tools.nrepl.StdOutBuffer.)]
-    (PrintWriter. (proxy [Writer] []
-                    (close [] (.flush ^Writer this))
-                    (write [& [x ^Integer off ^Integer len]]
-                      (locking buf
-                        (cond
-                          (number? x) (.append buf (char x))
-                          (not off) (.append buf x)
-                          (instance? CharSequence x) (.append buf ^CharSequence x off len)
-                          :else (.append buf ^chars x off len))
-                        (when (<= *out-limit* (.length buf))
-                          (.flush ^Writer this))))
-                    (flush []
-                      (let [text (locking buf (let [text (str buf)]
-                                                (.setLength buf 0)
-                                                text))]
-                        (when (pos? (count text))
-                          (t/send transport
-                            (response-for *msg* :session session-id
-                                                 channel-type text))))))
-                  true)))
+  (let [buf (StringBuilder.)]
+    (proxy [StringWriter] [buf]
+      (Dispose [] (.Flush this))
+      (Write [x]
+        (proxy-super Write x)
+        (when (<= *out-limit* (.Length buf))
+          (.Flush this)))
+      (Flush []
+        (let [text (locking buf (let [text (.ToString buf)]
+                                  (.set_Length buf 0)
+                                  text))]
+          (when (pos? (count text))
+            (t/send transport
+                    (response-for *msg* :session session-id
+                                  channel-type text))))))
+    true))
 
 (defn- session-in
   "Returns a LineNumberingPushbackReader suitable for binding to *in*.
@@ -55,27 +59,24 @@
    {:status :need-input} message on the provided transport so the client/user
    can provide content to be read."
   [session-id transport]
-  (let [request-input (fn [^PipedReader r]
-                        (when-not (.ready r)
+  (let [pipe-server (AnonymousPipeServerStream. PipeDirection/Out)
+        pipe-handle (.GetClientHandleAsString pipe-server)
+        pipe-client (AnonymousPipeClientStream. PipeDirection/In pipe-handle)
+        request-input (fn [^TextReader r func]
+                        (when (< (.Peek r) 0)
                           (t/send transport
                             (response-for *msg* :session session-id
-                                                :status :need-input))))
-        writer (PipedWriter.)
-        reader (LineNumberingPushbackReader.
-                 (proxy [PipedReader] [writer]
-                   (close [])
-                   (read
-                     ([] (request-input this)
-                         (let [^Reader this this] (proxy-super read)))
-                     ([x] (request-input this)
-                          (let [^Reader this this]
-                            (if (instance? java.nio.CharBuffer x)
-                              (proxy-super read ^java.nio.CharBuffer x)
-                              (proxy-super read ^chars x))))
-                     ([buf off len]
-                       (let [^Reader this this]
+                                          :status :need-input))))
+        writer (StreamWriter. pipe-server)
+        reader (LineNumberingTextReader.
+                 (proxy [StreamReader] [pipe-client]
+                   (Read []
+                     (request-input this)
+                     (let [^TextReader this this] (proxy-super Read)))
+                   (ReadBlock [buf idx cnt]
+                     (let [^Reader this this]
                          (request-input this)
-                         (proxy-super read buf off len))))))]
+                         (proxy-super ReadBlock buf idx cnt)))))]
     [reader writer]))
 
 (defn- create-session
@@ -193,13 +194,13 @@
   (fn [{:keys [op stdin session transport] :as msg}]
     (cond
       (= op "eval")
-        (let [s (-> session meta ^LineNumberingPushbackReader (:stdin-reader))]
+        (let [s (-> session meta ^LineNumberingTextReader (:stdin-reader))]
           (when (.ready s)
             (clojure.main/skip-if-eol s))
           (h msg))
       (= op "stdin")
         (do
-          (-> session meta ^Writer (:stdin-writer) (.write ^String stdin))
+          (-> session meta ^TextWriter (:stdin-writer) (.write ^String stdin))
           (t/send transport (response-for msg :status :done)))
       :else
         (h msg))))
