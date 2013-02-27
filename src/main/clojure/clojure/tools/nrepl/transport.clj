@@ -8,7 +8,8 @@
   (:refer-clojure :exclude (send))
   (:import
    [System.Text Encoding]
-   [System.Net.Sockets Socket SocketException]))
+   [System.Net.Sockets Socket SocketException
+    TcpClient]))
  
 (defprotocol Transport
   "Defines the interface for a wire protocol implementation for use
@@ -28,12 +29,12 @@
   (Dispose [this] (close)))
 
 (defn synchronous-queue []
-  (|System.Collections.Concurrent.ConcurrentQueue`1[System.Object]|.))
+  (|System.Collections.Concurrent.BlockingCollection`1[System.Object]|.))
 
-(def ^:private try-take-method (.GetMethod (type (synchronous-queue)) "TryTake" (into-array Type [Object Int32])))
+(def ^:private try-take-method (.GetMethod (type (synchronous-queue)) "TryTake" (into-array Type [(.MakeByRefType Object) Int32])))
 
 (defn- queue-poll [queue timeout]
-  (let [args (into-array Object [nil timeout])]
+  (let [args (into-array Object [nil (int timeout)])]
     (when (.Invoke try-take-method queue args)
       (aget args 0))))
 
@@ -81,35 +82,40 @@
        (into {})))
 
 (defmacro ^{:private true} rethrow-on-disconnection
-  [^Socket s & body]
+  [^TcpClient s & body]
   `(try
      ~@body
      (catch System.IO.EndOfStreamException e#
-       (throw (SocketException. "The transport's socket appears to have lost its connection to the nREPL server")))
+       (throw (Exception. "The transport's socket appears to have lost its connection to the nREPL server" e#)))
      (catch Exception e#
-       (if (and ~s (not (.isConnected ~s)))
-         (throw (SocketException. "The transport's socket appears to have lost its connection to the nREPL server"))
+       (if (and ~s (not (.Connected ~s)))
+         (throw (Exception. "The transport's socket appears to have lost its connection to the nREPL server" e#))
          (throw e#)))))
 
 (defn bencode
   "Returns a Transport implementation that serializes messages
 over the given Socket or InputStream/OutputStream using bencode."
-  ([^Socket s] (bencode s s s))
-  ([in out & [^Socket s]]
+  ([^TcpClient s]
+     (let [stream (.GetStream s)]
+       (bencode stream stream s)))
+  ([in out & [^TcpClient s]]
      (let [in (io/input-stream in)
            out (io/output-stream out)]
        (fn-transport
-        #(let [payload (rethrow-on-disconnection s (be/read-bencode in))
-               unencoded (<bytes (payload "-unencoded"))
-               to-decode (apply dissoc payload "-unencoded" unencoded)]
-           (merge (dissoc payload "-unencoded")
-                  (when unencoded {"-unencoded" unencoded})
-                  (<bytes to-decode)))
-        #(rethrow-on-disconnection s
-           (locking out
-             (doto out
-               (be/write-bencode %)
-               .Flush)))
+        (fn read-fn []
+          (let [payload (rethrow-on-disconnection s (be/read-bencode in))
+                unencoded (<bytes (payload "-unencoded"))
+                to-decode (apply dissoc payload "-unencoded" unencoded)]
+            (merge (dissoc payload "-unencoded")
+                   (when unencoded {"-unencoded" unencoded})
+                   (<bytes to-decode))))
+        (fn write-fn [x]
+          (println "writing" x)
+          (rethrow-on-disconnection s
+                                    (locking out
+                                      (doto out
+                                        (be/write-bencode x)
+                                        .Flush))))
         (fn []
           (.Dispose in)
           (.Dispose out)

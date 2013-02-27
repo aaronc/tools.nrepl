@@ -94,7 +94,7 @@
     (when (neg? c)
       (throw
        (Exception. "Invalid netstring. Unexpected end of input.")))
-    (byte c)))
+    c))
 
 (defn #^{:private true :tag |System.Byte[]|} read-bytes
   #^Object [#^Stream input n]
@@ -391,6 +391,7 @@
 (declare lexicographically)
 
 (defmethod write-bencode :map
+  write-bencode-map
   [#^Stream output m]
   (let [translation (into {} (map (juxt string>payload identity) (keys m)))
         key-strings (sort lexicographically (keys translation))

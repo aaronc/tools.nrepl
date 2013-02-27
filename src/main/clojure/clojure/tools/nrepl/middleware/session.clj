@@ -74,7 +74,7 @@
                      (request-input this)
                      (let [^TextReader this this] (proxy-super Read)))
                    (ReadBlock [buf idx cnt]
-                     (let [^Reader this this]
+                     (let [^TextReader this this]
                          (request-input this)
                          (proxy-super ReadBlock buf idx cnt)))))]
     [reader writer]))

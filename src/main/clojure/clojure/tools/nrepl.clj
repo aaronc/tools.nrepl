@@ -171,7 +171,8 @@
   [& {:keys [port host transport-fn] :or {transport-fn transport/bencode
                                           host "localhost"}}]
   {:pre [transport-fn port]}
-  (transport-fn (TcpClient. ^String host (int port))))
+  (let [client (TcpClient. ^String host (int port))]
+    (transport-fn client)))
 
 (defn- ^Uri to-uri
   [x]

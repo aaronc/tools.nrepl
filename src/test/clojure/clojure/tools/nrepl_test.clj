@@ -1,5 +1,6 @@
 (ns clojure.tools.nrepl-test
-  (:import java.net.SocketException)
+  (:import [System.Net.Sockets SocketException]
+           [System.Threading Thread])
   (:use clojure.test
         clojure.tools.nrepl)
   (:require (clojure.tools.nrepl [transport :as transport]
@@ -11,17 +12,23 @@
 (defn repl-server-fixture
   [f]
   (with-open [server (server/start-server)]
+    (println "port" (:port server))
     (binding [*server* server]
       (f))))
 
 (use-fixtures :each repl-server-fixture)
+
+(def se1 (server/start-server))
+(def c1 (connect :port (:port se1)))
+(def cl1 (client c1 1000))
+(def s1 (client-session cl1))
 
 (defmacro def-repl-test
   [name & body]
   `(deftest ~(with-meta name {:private true})
      (with-open [transport# (connect :port (:port *server*))]
        (let [~'transport transport#
-             ~'client (client transport# Long/MAX_VALUE)
+             ~'client (client transport# Int64/MaxValue)
              ~'session (client-session ~'client)
              ~'timeout-client (client transport# 1000)
              ~'timeout-session (client-session ~'timeout-client)
@@ -201,7 +208,7 @@
                                                        halted?
                                                        (Thread/sleep 30000)
                                                        (def halted? false)))})]
-    (Thread/sleep 100)
+    (Thread/Sleep 100)
     (is (= #{"done"} (-> session (message {:op :interrupt}) first :status set)))
     (is (= #{"done" "interrupted"} (-> resp combine-responses :status)))
     (is (= [true] (repl-values session "halted?")))))
@@ -214,38 +221,41 @@
                      (take-while (complement nil?))
                      response-values))))
 
+(defn cur-time-millis []
+  (long (/ (.Ticks DateTime/Now) 10000)))
+
 (def-repl-test concurrent-message-handling
   (testing "multiple messages can be handled on the same connection concurrently"
     (let [sessions (doall (repeatedly 3 #(client-session client)))
-          start-time (System/currentTimeMillis)
+          start-time (cur-time-millis)
           elapsed-times (map (fn [session eval-duration]
-                               (let [expr (pr-str `(Thread/sleep ~eval-duration))
+                               (let [expr (pr-str `(Thread/Sleep ~eval-duration))
                                      responses (message session {:op :eval :code expr})]
                                  (future
                                    (is (= [nil] (response-values responses)))
-                                   (- (System/currentTimeMillis) start-time))))
+                                   (- (cur-time-millis) start-time))))
                              sessions
                              [2000 1000 0])]
       (is (apply > (map deref (doall elapsed-times)))))))
 
 (def-repl-test ensure-transport-closeable
   (is (= [5] (repl-values session "5")))
-  (is (instance? java.io.Closeable transport))
-  (.close transport)
-  (is (thrown? java.net.SocketException (repl-values session "5"))))
+  (is (instance? IDisposable transport))
+  (.Close transport)
+  (is (thrown? SocketException (repl-values session "5"))))
 
 ; test is flaking on hudson, but passing locally! :-X
 #_(def-repl-test ensure-server-closeable
-  (.close *server*)
-  (is (thrown? java.net.ConnectException (connect :port (:port *server*)))))
+  (.Dispose *server*)
+  (is (thrown? Exception (connect :port (:port *server*)))))
 
 ; wasn't added until Clojure 1.3.0
 (defn- root-cause
   "Returns the initial cause of an exception or error by peeling off all of
   its wrappers"
-  [^Throwable t]
+  [^Exception t]
   (loop [cause t]
-    (if-let [cause (.getCause cause)]
+    (if-let [cause (.InnerException cause)]
       (recur cause)
       cause)))
 
@@ -263,7 +273,7 @@
       
       (let [reader (future (while true (transport/recv transport)))]
         (Thread/sleep 1000)
-        (.close server)
+        (.Dispose server)
         (Thread/sleep 1000)
         ; no deref with timeout in Clojure 1.2.0 :-(
         (try
@@ -283,20 +293,20 @@
   (testing "Ensure that clients fail ASAP when the server they're connected to goes down."
     (let [resp (repl-eval client "1 2 3 4 5 6 7 8 9 10")]
       (is (= "1" (-> resp first :value)))
-      (Thread/sleep 1000)
-      (.close *server*)
-      (Thread/sleep 1000)
+      (Thread/Sleep 1000)
+      (.Close *server*)
+      (Thread/Sleep 1000)
       (try
         ; these responses were on the wire before the remote transport was closed
         (is (> 20 (count resp)))
         (transport/recv transport)
         (is false "reads after the server is closed should fail")
-        (catch Throwable t
+        (catch Exception t
           (is (disconnection-exception? t)))))
     
     ;; TODO as noted in transports-fail-on-disconnects, *sometimes* two sends are needed
     ;; to trigger an exception on send to an unavailable server
-    (try (repl-eval session "(+ 1 1)") (catch Throwable t))
+    (try (repl-eval session "(+ 1 1)") (catch Exception t))
     (is (thrown? SocketException (repl-eval session "(+ 1 1)")))))
 
 (def-repl-test request-*in*

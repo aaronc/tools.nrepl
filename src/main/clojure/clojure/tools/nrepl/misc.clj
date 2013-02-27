@@ -3,18 +3,26 @@
       :author "Chas Emerick"}
      clojure.tools.nrepl.misc)
 
-(try
-  (require 'clojure.tools.logging)
-  (defmacro log [& args] `(clojure.tools.logging/error ~@args))
-  (catch Exception t
-    ;(println "clojure.tools.logging not available, falling back to stdout/err")
-    (defn log
+;; (try
+;;   (require 'clojure.tools.logging)
+;;   (defmacro log [& args] `(clojure.tools.logging/error ~@args))
+;;   (catch Exception t
+;;     ;(println "clojure.tools.logging not available, falling back to stdout/err")
+;;     (defn log
+;;       [ex & msgs]
+;;       (let [ex (when (instance? Exception ex) ex)
+;;             msgs (if ex msgs (cons ex msgs))]
+;;         (binding [*out* *err*]
+;;           (apply println "ERROR:" msgs)
+;;           (when ex (println (.StackTrace ex))))))))
+
+(defn log
       [ex & msgs]
       (let [ex (when (instance? Exception ex) ex)
             msgs (if ex msgs (cons ex msgs))]
         (binding [*out* *err*]
           (apply println "ERROR:" msgs)
-          (when ex (println (.StackTrace ex))))))))
+          (when ex (println (.StackTrace ex))))))
 
 (defmacro returning
   "Executes `body`, returning `x`."

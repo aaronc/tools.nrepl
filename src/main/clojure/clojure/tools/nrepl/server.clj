@@ -7,7 +7,7 @@
                                  [middleware :as middleware])
             (clojure.tools.nrepl.middleware interruptible-eval
                                             pr-values
-                   ;;                         session
+                                            session
                                             load-file))
   (:use [clojure.tools.nrepl.misc :only (returning response-for log)])
   ;;(:import (java.net Socket ServerSocket InetSocketAddress))
@@ -48,19 +48,19 @@
 (defn- safe-close
   [x]
   (try
-    (.Close x)
+    (.Dispose x)
     (catch Exception e
       (log e "Failed to close " x))))
 
 (defn stop-server
   "Stops a server started via `start-server`."
-  [{:keys [open-transports ^ServerSocket server-socket] :as server}]
+  [{:keys [open-transports ^TcpListener server-socket] :as server}]
   (returning server
-    (.Close server-socket)
+    (.Stop server-socket)
     (swap! open-transports #(reduce
                               (fn [s t]
                                 ; should always be true for the socket server...
-                                (if (instance? java.io.Closeable t)
+                                (if (instance? IDisposable t)
                                   (do
                                     (safe-close t)
                                     (disj s t))
@@ -125,22 +125,20 @@
    either via `stop-server`, (.close server), or automatically via `with-open`.
    The port that the server is open on is available in the :port slot of the
    server map (useful if the :port option is 0 or was left unspecified."
-  [& {:keys [port bind transport-fn handler ack-port greeting-fn] :or {port 0}}]
-  (let [bind-addr (when bind (first (.AddressList (Dns/GetHostEntry bind))))
-        ss
-        (if bind-addr
-          (ServerSocket. bind-addr port)
-          (ServerSocket. port))
-        server (assoc
-                 (Server. ss
-                          (.getLocalPort ss)
-                          (atom #{})
-                          (or transport-fn t/bencode)
-                          greeting-fn
-                          (or handler (default-handler)))
-                 ;; TODO here for backward compat with 0.2.x; drop eventually
-                 :ss ss)]
-    (future (accept-connection server))
-    (when ack-port
-      (ack/send-ack (:port server) ack-port))
-    server))
+  [& {:keys [port bind transport-fn handler ack-port greeting-fn] :or {port 0 bind "localhost"}}]
+  (let [bind-addr (first (.AddressList (Dns/GetHostEntry bind)))
+        ss (TcpListener. bind-addr port)]
+    (.Start ss)
+    (let [server (assoc
+                     (Server. ss
+                              (.. ss LocalEndpoint Port)
+                              (atom #{})
+                              (or transport-fn t/bencode)
+                              greeting-fn
+                              (or handler (default-handler)))
+                   ;; TODO here for backward compat with 0.2.x; drop eventually
+                   :ss ss)]
+      (future (accept-connection server))
+      (when ack-port
+        (ack/send-ack (:port server) ack-port))
+      server)))
